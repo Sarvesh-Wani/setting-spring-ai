@@ -1,0 +1,253 @@
+Absolutely. Email sending is one of those things every Spring Boot developer eventually implements.
+
+For your Threshold project, you'll need emails for:
+
+Appointment booked
+Appointment rescheduled
+Intake reminder
+Visit summary ready
+
+Let's build it the same way a company project would.
+
+How Email Sending Actually Works
+Spring Boot
+     ↓
+JavaMailSender
+     ↓
+SMTP Server (Gmail)
+     ↓
+Patient Email Inbox
+
+Think of Gmail as the "database" for emails.
+
+Just like:
+
+userRepository.save(user);
+
+stores data in PostgreSQL,
+
+mailSender.send(message);
+
+sends data to Gmail SMTP.
+
+Step 1: Add Dependency
+
+pom.xml
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-mail</artifactId>
+</dependency>
+
+Reload Maven.
+
+Step 2: Create Gmail Account for Project
+
+Don't use your personal Gmail.
+
+Create something like:
+
+threshold.clinic.demo@gmail.com
+
+This is your application's email account.
+
+Step 3: Enable 2-Factor Authentication
+
+Open:
+
+Google Account Security
+
+Enable:
+
+2-Step Verification
+
+Mandatory.
+
+Step 4: Generate App Password
+
+After enabling 2FA:
+
+Open:
+
+Google App Passwords
+
+Create:
+
+App Name:
+Threshold Spring Boot
+
+Google gives:
+
+abcd efgh ijkl mnop
+
+This is NOT your Gmail password.
+
+This is the SMTP password.
+
+Copy it.
+
+Step 5: Configure Properties
+
+application.properties
+
+spring.mail.host=smtp.gmail.com
+
+spring.mail.port=587
+
+spring.mail.username=threshold.clinic.demo@gmail.com
+
+spring.mail.password=abcdefghijklmnop
+
+spring.mail.properties.mail.smtp.auth=true
+
+spring.mail.properties.mail.smtp.starttls.enable=true
+Better Approach
+
+Don't hardcode password.
+
+application.properties
+
+spring.mail.host=smtp.gmail.com
+
+spring.mail.port=587
+
+spring.mail.username=${MAIL_USERNAME}
+
+spring.mail.password=${MAIL_PASSWORD}
+
+Windows Environment Variables:
+
+MAIL_USERNAME
+threshold.clinic.demo@gmail.com
+
+MAIL_PASSWORD
+abcdefghijklmnop
+Step 6: Create Mail Service
+@Service
+@RequiredArgsConstructor
+public class EmailService {
+
+    private final JavaMailSender mailSender;
+
+}
+Step 7: Send Simple Email
+public void sendEmail(
+        String to,
+        String subject,
+        String body
+) {
+
+    SimpleMailMessage message =
+            new SimpleMailMessage();
+
+    message.setTo(to);
+
+    message.setSubject(subject);
+
+    message.setText(body);
+
+    mailSender.send(message);
+}
+
+That's the minimum working version.
+
+Step 8: Test Controller
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/test")
+public class TestController {
+
+    private final EmailService emailService;
+
+    @GetMapping("/email")
+    public String send() {
+
+        emailService.sendEmail(
+                "yourgmail@gmail.com",
+                "Spring Boot Test",
+                "Email is working"
+        );
+
+        return "Sent";
+    }
+}
+
+Run application.
+
+Open:
+
+GET /test/email
+
+Check inbox.
+
+If mail arrives:
+
+Congratulations.
+Spring Boot Email is working.
+Step 9: Appointment Confirmation Email
+
+Patient books appointment.
+
+Service:
+
+Appointment appointment =
+        appointmentRepository.save(...);
+
+Immediately after:
+
+emailService.sendEmail(
+        patient.getUser().getEmail(),
+        "Appointment Confirmed",
+        "Your appointment has been booked."
+);
+Better Message
+String body = String.format(
+"""
+Hello %s,
+
+Your appointment has been confirmed.
+
+Date: %s
+Doctor: %s
+
+Thank you,
+Threshold Clinic
+""",
+patient.getName(),
+appointment.getAppointmentDate(),
+clinician.getName()
+);
+
+Send:
+
+emailService.sendEmail(
+        patient.getUser().getEmail(),
+        "Appointment Confirmation",
+        body
+);
+Step 10: Intake Reminder
+
+Suppose appointment tomorrow.
+
+Patient has not completed intake.
+
+Send:
+
+emailService.sendEmail(
+        patientEmail,
+        "Intake Reminder",
+        "Please complete your intake form."
+);
+Step 11: Visit Summary Ready
+
+After clinician submits summary:
+
+visitSummaryRepository.save(summary);
+
+Then:
+
+emailService.sendEmail(
+        patientEmail,
+        "Visit Summary Available",
+        "Your visit summary is now available."
+);

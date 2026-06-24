@@ -1,0 +1,400 @@
+Now we're getting to the interesting part.
+
+For your project, the AI Assistant is **not just a chatbot**. It must actually perform actions. The spec says things like:
+
+```text
+What's my appointment and what is pending?
+
+Move my appointment to next Tuesday afternoon.
+
+Here's what's been bothering me...
+```
+
+The assistant must read the user's message, understand the intent, and then call your Spring Boot services. 
+
+---
+
+# Normal ChatGPT vs Assistant
+
+Normal:
+
+```text
+User
+ ↓
+LLM
+ ↓
+Text Response
+```
+
+Assistant:
+
+```text
+User
+ ↓
+LLM
+ ↓
+Identify Intent
+ ↓
+Call Spring Service
+ ↓
+Return Result
+```
+
+---
+
+# Example 1: Pending Intake
+
+User says:
+
+```text
+What's left to fill?
+```
+
+AI determines:
+
+```json
+{
+  "intent":"CHECK_INTAKE_STATUS"
+}
+```
+
+Then your code:
+
+```java
+IntakeForm intake =
+        intakeService.findByPatient(patientId);
+```
+
+Build response:
+
+```text
+You still need:
+
+- Insurance Card
+- Medical History
+```
+
+Return to user.
+
+---
+
+# Example 2: Reschedule Appointment
+
+User:
+
+```text
+Move my appointment to next Tuesday afternoon
+```
+
+AI extracts:
+
+```json
+{
+  "intent":"RESCHEDULE_APPOINTMENT",
+  "date":"2026-07-14",
+  "timePeriod":"AFTERNOON"
+}
+```
+
+Then:
+
+```java
+appointmentService.reschedule(
+        appointmentId,
+        newDateTime
+);
+```
+
+Appointment updated in DB.
+
+---
+
+# Example 3: Generate Pre-Visit Summary
+
+User:
+
+```text
+I've been having headaches for 2 weeks and dizziness...
+```
+
+AI returns:
+
+```text
+Main Concern:
+- Headaches
+
+Symptoms:
+- Dizziness
+
+Duration:
+- 2 weeks
+```
+
+Store in DB.
+
+Clinician sees it later.
+
+---
+
+# How to Build This
+
+Create endpoint:
+
+```java
+@PostMapping("/assistant")
+public AssistantResponse chat(
+        @RequestBody AssistantRequest request
+) {
+    return assistantService.process(
+            request.getMessage()
+    );
+}
+```
+
+Request:
+
+```json
+{
+   "message":"Move my appointment to next Tuesday afternoon"
+}
+```
+
+---
+
+# Assistant Service
+
+```java
+@Service
+@RequiredArgsConstructor
+public class AssistantService {
+
+    private final ChatClient chatClient;
+
+}
+```
+
+---
+
+# Step 1: Ask AI for Intent
+
+Prompt:
+
+```java
+String prompt = """
+You are an assistant.
+
+Classify the message.
+
+Possible intents:
+
+CHECK_INTAKE_STATUS
+
+RESCHEDULE_APPOINTMENT
+
+GENERATE_PREVISIT_SUMMARY
+
+Return only JSON.
+
+Message:
+%s
+""".formatted(userMessage);
+```
+
+---
+
+Call AI:
+
+```java
+String result =
+        chatClient.prompt()
+                .user(prompt)
+                .call()
+                .content();
+```
+
+Suppose AI returns:
+
+```json
+{
+   "intent":"RESCHEDULE_APPOINTMENT"
+}
+```
+
+---
+
+# Step 2: Convert JSON to Java
+
+DTO:
+
+```java
+@Data
+public class IntentResponse {
+
+    private String intent;
+}
+```
+
+ObjectMapper:
+
+```java
+IntentResponse intent =
+        objectMapper.readValue(
+                result,
+                IntentResponse.class
+        );
+```
+
+---
+
+# Step 3: Route Request
+
+```java
+switch(intent.getIntent()) {
+
+    case "CHECK_INTAKE_STATUS":
+        return handleStatus();
+
+    case "RESCHEDULE_APPOINTMENT":
+        return handleReschedule();
+
+    case "GENERATE_PREVISIT_SUMMARY":
+        return handleSummary();
+
+    default:
+        throw new RuntimeException();
+}
+```
+
+---
+
+# Reschedule Handler
+
+```java
+private AssistantResponse handleReschedule(
+        String message,
+        Long patientId
+) {
+
+    Appointment appointment =
+            appointmentService
+                    .getUpcomingAppointment(
+                            patientId
+                    );
+
+    appointmentService.reschedule(
+            appointment.getId(),
+            LocalDateTime.of(...)
+    );
+
+    return new AssistantResponse(
+            "Appointment rescheduled."
+    );
+}
+```
+
+---
+
+# Better Approach (Structured Output)
+
+Instead of:
+
+```json
+{
+  "intent":"RESCHEDULE_APPOINTMENT"
+}
+```
+
+Ask AI:
+
+```json
+{
+  "intent":"RESCHEDULE_APPOINTMENT",
+  "date":"2026-07-14",
+  "timePeriod":"AFTERNOON"
+}
+```
+
+DTO:
+
+```java
+@Data
+public class AssistantIntent {
+
+    private String intent;
+
+    private String date;
+
+    private String timePeriod;
+}
+```
+
+Now you have all data needed to call your service.
+
+---
+
+# Real Flow in Your Project
+
+```text
+Patient
+   ↓
+Assistant Chat UI
+   ↓
+POST /assistant
+   ↓
+AssistantService
+   ↓
+OpenAI
+   ↓
+Intent + Parameters
+   ↓
+Spring Service
+   ↓
+Database Update
+   ↓
+Response
+```
+
+Example:
+
+```text
+Move my appointment to next Tuesday afternoon
+```
+
+↓
+
+AI
+
+```json
+{
+  "intent":"RESCHEDULE_APPOINTMENT",
+  "date":"2026-07-14",
+  "timePeriod":"AFTERNOON"
+}
+```
+
+↓
+
+```java
+appointmentService.reschedule(...)
+```
+
+↓
+
+Database updated
+
+↓
+
+```text
+Your appointment has been moved to
+14 July 2026 at 2:00 PM.
+```
+
+---
+
+For a 4-day capstone, I would keep the assistant to exactly these 3 intents from the spec:
+
+1. `CHECK_INTAKE_STATUS`
+2. `RESCHEDULE_APPOINTMENT`
+3. `GENERATE_PREVISIT_SUMMARY`
+
+Don't try to build a general-purpose AI agent. A focused assistant that correctly handles those three actions will fully satisfy the project requirements and be much more reliable.

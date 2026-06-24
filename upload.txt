@@ -1,0 +1,479 @@
+If you're asking about **file upload in Spring Boot** for the Threshold project (uploading ID card, insurance card, medical reports), here's the exact industry-style implementation from scratch.
+
+---
+
+# Step 1: Add Dependency
+
+If you have:
+
+```xml
+spring-boot-starter-web
+```
+
+then Multipart support is already available.
+
+No extra dependency needed.
+
+---
+
+# Step 2: Configure Upload Folder
+
+application.properties
+
+```properties
+file.upload-dir=uploads
+```
+
+or
+
+```properties
+file.upload-dir=C:/uploads
+```
+
+For now use:
+
+```properties
+file.upload-dir=uploads
+```
+
+Spring will create:
+
+```text
+project-root
+    uploads
+```
+
+---
+
+# Step 3: Create Document Entity
+
+```java
+@Entity
+@Table(name = "documents")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Document {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String fileName;
+
+    private String originalFileName;
+
+    private String filePath;
+
+    private String contentType;
+
+    private Long fileSize;
+
+    @Enumerated(EnumType.STRING)
+    private DocumentType documentType;
+
+    @ManyToOne
+    @JoinColumn(name = "patient_id")
+    private Patient patient;
+}
+```
+
+---
+
+# Step 4: Create Document Type Enum
+
+```java
+public enum DocumentType {
+
+    ID_CARD,
+
+    INSURANCE_CARD,
+
+    LAB_REPORT,
+
+    MEDICAL_RECORD
+}
+```
+
+---
+
+# Step 5: Repository
+
+```java
+@Repository
+public interface DocumentRepository
+        extends JpaRepository<Document, Long> {
+}
+```
+
+---
+
+# Step 6: Create Upload Controller
+
+```java
+@RestController
+@RequestMapping("/patient/documents")
+@RequiredArgsConstructor
+public class DocumentController {
+
+    private final DocumentService documentService;
+
+}
+```
+
+---
+
+# Step 7: Multipart Upload Endpoint
+
+```java
+@PostMapping("/upload")
+public ResponseEntity<String> upload(
+        @RequestParam("file") MultipartFile file,
+        @RequestParam("patientId") Long patientId,
+        @RequestParam("documentType")
+        DocumentType documentType
+) {
+
+    documentService.upload(
+            file,
+            patientId,
+            documentType
+    );
+
+    return ResponseEntity.ok("Uploaded");
+}
+```
+
+---
+
+# Step 8: Service
+
+```java
+@Service
+@RequiredArgsConstructor
+public class DocumentService {
+
+    private final DocumentRepository documentRepository;
+
+    private final PatientRepository patientRepository;
+
+}
+```
+
+---
+
+# Step 9: Read Upload Path
+
+```java
+@Value("${file.upload-dir}")
+private String uploadDir;
+```
+
+Spring automatically reads:
+
+```properties
+file.upload-dir=uploads
+```
+
+---
+
+# Step 10: Validate File
+
+```java
+private void validate(MultipartFile file) {
+
+    if(file.isEmpty()) {
+        throw new RuntimeException(
+                "File cannot be empty"
+        );
+    }
+
+}
+```
+
+For project:
+
+```java
+private void validate(MultipartFile file) {
+
+    if(file.isEmpty()) {
+        throw new RuntimeException(
+                "File cannot be empty"
+        );
+    }
+
+    long maxSize =
+            5 * 1024 * 1024;
+
+    if(file.getSize() > maxSize) {
+
+        throw new RuntimeException(
+                "Maximum size is 5MB"
+        );
+    }
+}
+```
+
+---
+
+# Step 11: Generate Unique Filename
+
+Never save:
+
+```text
+insurance.pdf
+```
+
+because another patient can upload:
+
+```text
+insurance.pdf
+```
+
+and overwrite it.
+
+Use UUID.
+
+```java
+String uniqueFileName =
+        UUID.randomUUID()
+        + "_"
+        + file.getOriginalFilename();
+```
+
+Example:
+
+```text
+9f3c8a2d-insurance.pdf
+```
+
+---
+
+# Step 12: Create Folder If Not Exists
+
+```java
+Path uploadPath =
+        Paths.get(uploadDir);
+
+if(!Files.exists(uploadPath)) {
+
+    Files.createDirectories(
+            uploadPath
+    );
+}
+```
+
+---
+
+# Step 13: Save File Physically
+
+```java
+Path filePath =
+        uploadPath.resolve(
+                uniqueFileName
+        );
+
+Files.copy(
+        file.getInputStream(),
+        filePath,
+        StandardCopyOption.REPLACE_EXISTING
+);
+```
+
+Now file exists on disk.
+
+```text
+uploads/
+    9f3c8a2d-insurance.pdf
+```
+
+---
+
+# Step 14: Save Metadata To DB
+
+Get patient.
+
+```java
+Patient patient =
+        patientRepository
+        .findById(patientId)
+        .orElseThrow();
+```
+
+Create entity.
+
+```java
+Document document =
+        Document.builder()
+        .fileName(uniqueFileName)
+        .originalFileName(
+                file.getOriginalFilename()
+        )
+        .filePath(
+                filePath.toString()
+        )
+        .contentType(
+                file.getContentType()
+        )
+        .fileSize(
+                file.getSize()
+        )
+        .documentType(documentType)
+        .patient(patient)
+        .build();
+```
+
+Save:
+
+```java
+documentRepository.save(document);
+```
+
+---
+
+# Complete Upload Method
+
+```java
+@Transactional
+public void upload(
+        MultipartFile file,
+        Long patientId,
+        DocumentType documentType
+) throws IOException {
+
+    validate(file);
+
+    String uniqueFileName =
+            UUID.randomUUID()
+            + "_"
+            + file.getOriginalFilename();
+
+    Path uploadPath =
+            Paths.get(uploadDir);
+
+    if(!Files.exists(uploadPath)) {
+
+        Files.createDirectories(
+                uploadPath
+        );
+    }
+
+    Path filePath =
+            uploadPath.resolve(
+                    uniqueFileName
+            );
+
+    Files.copy(
+            file.getInputStream(),
+            filePath
+    );
+
+    Patient patient =
+            patientRepository
+                    .findById(patientId)
+                    .orElseThrow();
+
+    Document document =
+            Document.builder()
+                    .fileName(uniqueFileName)
+                    .originalFileName(
+                            file.getOriginalFilename()
+                    )
+                    .filePath(
+                            filePath.toString()
+                    )
+                    .contentType(
+                            file.getContentType()
+                    )
+                    .fileSize(
+                            file.getSize()
+                    )
+                    .documentType(
+                            documentType
+                    )
+                    .patient(patient)
+                    .build();
+
+    documentRepository.save(document);
+}
+```
+
+---
+
+# Step 15: Test Using Postman
+
+Method:
+
+```http
+POST
+```
+
+URL:
+
+```http
+localhost:8080/patient/documents/upload
+```
+
+Body:
+
+```text
+form-data
+```
+
+Add:
+
+| Key          | Type | Value          |
+| ------------ | ---- | -------------- |
+| file         | File | insurance.pdf  |
+| patientId    | Text | 1              |
+| documentType | Text | INSURANCE_CARD |
+
+Hit Send.
+
+---
+
+# Step 16: Download Endpoint
+
+Clinician wants to view uploaded report.
+
+```java
+@GetMapping("/{id}")
+public ResponseEntity<Resource>
+download(
+        @PathVariable Long id
+)
+```
+
+Find document.
+
+```java
+Document document =
+        documentRepository
+        .findById(id)
+        .orElseThrow();
+```
+
+Load file:
+
+```java
+Resource resource =
+        new UrlResource(
+                Paths.get(
+                        document.getFilePath()
+                ).toUri()
+        );
+```
+
+Return:
+
+```java
+return ResponseEntity.ok()
+        .header(
+                HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename="
+                + document.getOriginalFileName()
+        )
+        .body(resource);
+```

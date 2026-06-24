@@ -1,0 +1,521 @@
+Perfect. Let's forget "AI" for a moment and think like a Spring Boot developer.
+
+Your goal is:
+
+```text
+Patient fills intake form
+        ↓
+medicalHistory stored in DB
+        ↓
+AI reads medicalHistory
+        ↓
+AI generates summary
+        ↓
+summary stored in DB
+        ↓
+Clinician sees summary
+```
+
+That's all.
+
+---
+
+# Step 1: Create OpenAI Account
+
+Go to:
+
+[OpenAI Platform](https://platform.openai.com?utm_source=chatgpt.com)
+
+Login.
+
+Then:
+
+```text
+Dashboard
+   ↓
+API Keys
+   ↓
+Create New Secret Key
+```
+
+You'll get something like:
+
+```text
+sk-proj-abc123xyz...
+```
+
+Copy it.
+
+**Important:** You cannot see it again.
+
+---
+
+# Step 2: Store API Key Securely
+
+Never do this:
+
+```properties
+spring.ai.openai.api-key=sk-proj-abc123
+```
+
+
+Instead use environment variable.
+
+---
+
+## Windows
+
+Search:
+
+```text
+Edit Environment Variables
+```
+
+Create:
+
+```text
+OPENAI_API_KEY
+```
+
+Value:
+
+```text
+sk-proj-xxxxxxxxxxxx
+```
+
+Restart IntelliJ.
+
+---
+
+## Verify
+
+In terminal:
+
+```cmd
+echo %OPENAI_API_KEY%
+```
+
+Should print key.
+
+---
+
+# Step 3: Add Dependency
+
+Spring Boot 3.x
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-model-openai</artifactId>
+</dependency>
+```
+
+Also add BOM:
+
+```xml
+<dependencyManagement>
+    <dependencies>
+
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-bom</artifactId>
+            <version>1.0.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+
+        </dependency>
+
+    </dependencies>
+</dependencyManagement>
+```
+
+---
+
+# Step 4: application.properties
+
+```properties
+spring.ai.openai.api-key=${OPENAI_API_KEY}
+
+spring.ai.openai.chat.options.model=gpt-4o-mini
+```
+
+Explanation:
+
+```text
+${OPENAI_API_KEY}
+```
+
+means:
+
+```text
+Take API key from system environment
+```
+
+---
+
+# Step 5: Verify AI Connection
+
+Create test controller.
+
+```java
+@RestController
+@RequiredArgsConstructor
+public class TestController {
+
+    private final ChatClient chatClient;
+
+    @GetMapping("/test")
+    public String test() {
+
+        return chatClient.prompt()
+                .user("Say hello")
+                .call()
+                .content();
+    }
+}
+```
+
+Run application.
+
+Call:
+
+```http
+GET /test
+```
+
+Response:
+
+```text
+Hello!
+```
+
+Congratulations.
+
+Spring Boot is now talking to OpenAI.
+
+---
+
+# Step 6: Modify Intake Entity
+
+Current entity:
+
+```java
+@Entity
+public class IntakeForm {
+
+    @Id
+    @GeneratedValue
+    private Long id;
+
+    private String reasonForVisit;
+
+    private String medicalHistory;
+}
+```
+
+Add:
+
+```java
+@Column(columnDefinition = "TEXT")
+private String aiSummary;
+```
+
+Final:
+
+```java
+@Entity
+public class IntakeForm {
+
+    @Id
+    @GeneratedValue
+    private Long id;
+
+    private String reasonForVisit;
+
+    @Column(columnDefinition = "TEXT")
+    private String medicalHistory;
+
+    @Column(columnDefinition = "TEXT")
+    private String aiSummary;
+}
+```
+
+---
+
+# Step 7: Create AI Service
+
+```java
+@Service
+@RequiredArgsConstructor
+public class IntakeAiService {
+
+    private final ChatClient chatClient;
+
+    public String summarizeMedicalHistory(
+            String medicalHistory
+    ) {
+
+        String prompt = """
+                You are a medical intake assistant.
+
+                Summarize the patient intake.
+
+                Rules:
+                - No diagnosis
+                - No treatment advice
+                - No assumptions
+
+                Return:
+
+                Main Concern:
+                Symptoms:
+                Medical History:
+                Medications:
+                Allergies:
+
+                Patient Input:
+
+                %s
+                """
+                .formatted(medicalHistory);
+
+        return chatClient.prompt()
+                .user(prompt)
+                .call()
+                .content();
+    }
+}
+```
+
+---
+
+# Step 8: Patient Submits Intake
+
+Patient sends:
+
+```json
+{
+  "reasonForVisit":"Headache",
+  "medicalHistory":"I have had headaches for 2 weeks..."
+}
+```
+
+Controller:
+
+```java
+@PostMapping
+public IntakeResponse submit(
+        @RequestBody IntakeRequest request
+) {
+
+    return intakeService.submit(request);
+}
+```
+
+---
+
+# Step 9: Service Layer
+
+This is where everything happens.
+
+```java
+@Service
+@RequiredArgsConstructor
+public class IntakeService {
+
+    private final IntakeRepository intakeRepository;
+
+    private final IntakeAiService intakeAiService;
+
+    public IntakeResponse submit(
+            IntakeRequest request
+    ) {
+
+        IntakeForm form =
+                intakeMapper.toEntity(request);
+
+        intakeRepository.save(form);
+
+        String summary =
+                intakeAiService
+                        .summarizeMedicalHistory(
+                                request.getMedicalHistory()
+                        );
+
+        form.setAiSummary(summary);
+
+        intakeRepository.save(form);
+
+        return intakeMapper.toResponse(form);
+    }
+}
+```
+
+---
+
+# What Actually Happens Here?
+
+Patient enters:
+
+```text
+I have had headaches for 2 weeks.
+
+I have diabetes since 2018.
+
+Taking Metformin daily.
+
+No allergies.
+```
+
+This text is sent to OpenAI.
+
+OpenAI returns:
+
+```text
+Main Concern:
+- Headaches for 2 weeks
+
+Symptoms:
+- Persistent headaches
+
+Medical History:
+- Diabetes (since 2018)
+
+Medications:
+- Metformin
+
+Allergies:
+- None reported
+```
+
+Then:
+
+```java
+form.setAiSummary(summary);
+```
+
+stores it.
+
+DB:
+
+| id | medical_history | ai_summary    |
+| -- | --------------- | ------------- |
+| 1  | Long paragraph  | Short summary |
+
+---
+
+# Step 10: Show Summary to Clinician
+
+Clinician endpoint:
+
+```java
+@GetMapping("/{id}")
+public IntakeResponse getPatientIntake(
+        @PathVariable Long id
+) {
+    return intakeService.getById(id);
+}
+```
+
+Response:
+
+```json
+{
+   "reasonForVisit":"Headache",
+
+   "medicalHistory":"....",
+
+   "aiSummary":"Main Concern..."
+}
+```
+
+Frontend shows:
+
+```text
+AI Summary
+```
+
+at top.
+
+```text
+Original Intake
+```
+
+below.
+
+---
+
+# Production Improvement
+
+Don't make patient wait.
+
+Current flow:
+
+```text
+Save
+ ↓
+Call OpenAI
+ ↓
+Wait 3 sec
+ ↓
+Response
+```
+
+Bad UX.
+
+Instead:
+
+```text
+Save Intake
+ ↓
+Return Success Immediately
+ ↓
+Background Thread
+ ↓
+Call OpenAI
+ ↓
+Store Summary
+```
+
+Use:
+
+```java
+@EnableAsync
+```
+
+and
+
+```java
+@Async
+```
+
+This is what many real systems do.
+
+---
+
+# Cost Consideration
+
+For an internship project, use:
+
+```properties
+spring.ai.openai.chat.options.model=gpt-4o-mini
+```
+
+because it's much cheaper than larger models and more than good enough for summarization.
+
+For your Threshold project, if you implement:
+
+✅ Intake Form
+✅ OpenAI Summary Generation
+✅ Store Summary in DB
+✅ Clinician Reads Summary
+
+that alone will make your project stand out because it demonstrates:
+
+* Spring AI
+* Prompt Engineering
+* Async Processing
+* Real business use case
+* Clean backend architecture
+
+which is exactly the kind of thing interviewers love to ask about.
