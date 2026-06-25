@@ -1,0 +1,202 @@
+8. Add a default value in the entity (recommended)
+
+Instead of setting it only in the service,
+
+@Column(name = "is_inactive", nullable = false)
+private Boolean isInactive = false;
+
+Then even if someone forgets
+
+setIsInactive(false);
+
+the entity already has
+
+false
+
+This is a common practice.
+
+9. Also set a database default
+ALTER TABLE clinician
+ALTER COLUMN is_inactive SET DEFAULT FALSE;
+
+or while creating the table
+
+is_inactive BOOLEAN NOT NULL DEFAULT FALSE
+
+This gives protection even if another application inserts rows.
+
+What I suspect
+
+Your service code is correct:
+
+Clinician clinician = new Clinician();
+clinician.setName(request.getName());
+clinician.setSpecialization(request.getSpecialization());
+clinician.setIsInactive(Boolean.FALSE);
+
+This should save false.
+
+If it doesn't, then one of these is happening:
+
+clinician.getIsInactive() is becoming null before save().
+Hibernate is not including the column in the INSERT.
+The database column is not what you expect.
+Something (like a mapper or lifecycle callback) is overwriting the value.
+Could you also share:
+The clinician table DDL (CREATE TABLE clinician ...).
+The Hibernate SQL logs for the INSERT statement.
+Whether log.info("Inactive = {}", clinician.getIsInactive()) prints false or null.
+
+Those three pieces will pinpoint the exact cause.
+
+
+If it is actually a Hibernate problem, the solution depends on why Hibernate is sending NULL. Hibernate itself does not randomly convert false to null, so we need to identify the specific cause.
+
+Here are the common scenarios:
+
+Case 1: Hibernate is binding NULL instead of false
+
+If your logs show something like:
+
+insert into clinician
+(name, specialization, is_inactive, user_id)
+values (?, ?, ?, ?)
+
+and the bind log says:
+
+binding parameter [3] as BOOLEAN - [null]
+
+then Hibernate received null from your entity.
+
+Fix
+
+Make sure the field is initialized:
+
+@Column(name = "is_inactive", nullable = false)
+private Boolean isInactive = Boolean.FALSE;
+
+or
+
+private Boolean isInactive = false;
+
+Then your service can still override it if needed.
+
+Case 2: Hibernate is not including the column in the INSERT
+
+Suppose SQL looks like:
+
+insert into clinician
+(name, specialization, user_id)
+values (?, ?, ?)
+
+Notice is_inactive is missing.
+
+This can happen if you have annotations like:
+
+@Column(insertable = false)
+
+or
+
+@Generated(...)
+Fix
+
+Ensure your field is simply:
+
+@Column(name = "is_inactive")
+private Boolean isInactive;
+
+without insertable = false.
+
+Case 3: @DynamicInsert
+
+If your entity has
+
+@DynamicInsert
+
+Hibernate omits columns whose values are null.
+
+That is expected behavior.
+
+Fix
+
+Either remove @DynamicInsert or ensure
+
+isInactive = false;
+
+before saving.
+
+Case 4: Database default
+
+If Hibernate sends NULL, PostgreSQL/MySQL will not apply the default. Database defaults are used only when the column is omitted from the INSERT.
+
+A good database definition is:
+
+is_inactive BOOLEAN NOT NULL DEFAULT FALSE
+Case 5: Primitive vs Wrapper
+
+Instead of
+
+private Boolean isInactive;
+
+consider
+
+private boolean isInactive;
+
+Why?
+
+Boolean can be null.
+boolean is always either true or false.
+
+This is generally the better choice if the value should never be null.
+
+@Column(name = "is_inactive", nullable = false)
+private boolean isInactive = false;
+Case 6: Hibernate cache
+
+If you've just added the column, Hibernate's metadata may be stale.
+
+Try:
+
+Stop the application.
+Run a clean build (mvn clean or Gradle equivalent).
+Restart the application.
+If you're using hot reload (like DevTools), try without it.
+Case 7: Lombok isn't the issue
+
+Your entity has:
+
+@Getter
+@Setter
+
+so setIsInactive(Boolean.FALSE) will work correctly. Lombok isn't likely to be the cause.
+
+What I'd recommend
+
+If isInactive should never be null, model it that way:
+
+@Column(name = "is_inactive", nullable = false)
+private boolean isInactive = false;
+
+This is simpler and prevents accidental null values.
+
+Before assuming it's a Hibernate bug
+
+A genuine Hibernate bug is very unlikely. The first thing I'd check is the SQL logs:
+
+spring.jpa.show-sql=true
+logging.level.org.hibernate.SQL=DEBUG
+logging.level.org.hibernate.orm.jdbc.bind=TRACE
+
+If Hibernate logs:
+
+binding parameter [3] as BOOLEAN - [false]
+
+then Hibernate is working correctly, and the issue is elsewhere (database schema, triggers, etc.).
+
+If it logs:
+
+binding parameter [3] as BOOLEAN - [null]
+
+then something in your application has set the field to null before persistence.
+
+That log is the fastest way to determine where the problem lies.

@@ -1,0 +1,593 @@
+Great, I'll teach you Spring AI from scratch — step by step, with working code — starting with your additional requirement (summarizing patient medical history), then moving to the Threshold Intake Assistant.
+
+Here's the full guide:
+
+---
+
+# Spring AI — Complete Beginner's Guide for Threshold
+
+## What is Spring AI?
+
+Spring AI is a library that lets your **Spring Boot backend talk to AI models** (like OpenAI's GPT) using simple Java code. Think of it like this:
+
+```
+Your Java Code  →  Spring AI  →  OpenAI / Anthropic / etc.  →  AI Response back
+```
+
+No need to write raw HTTP calls or handle JSON manually — Spring AI wraps all of that.
+
+---
+
+## PART 1 — Setup (Do This First)
+
+### Step 1: Create a Spring Boot Project
+
+Go to [start.spring.io](https://start.spring.io) and configure:
+
+- **Project**: Maven
+- **Language**: Java
+- **Spring Boot**: 3.2.x or later
+- **Java**: 17+
+- **Dependencies**: Add `Spring Web`
+
+Download and unzip it.
+
+---
+
+### Step 2: Add Spring AI to `pom.xml`
+
+Open `pom.xml` and add these two things:
+
+```xml
+<!-- 1. Add the Spring AI BOM in <dependencyManagement> -->
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-bom</artifactId>
+            <version>1.0.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+<!-- 2. Add the OpenAI starter in <dependencies> -->
+<dependencies>
+    <!-- your existing spring-boot-starter-web is already here -->
+
+    <dependency>
+        <groupId>org.springframework.ai</groupId>
+        <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+    </dependency>
+</dependencies>
+```
+
+---
+
+### Step 3: Add your API Key to `application.properties`
+
+```properties
+# src/main/resources/application.properties
+
+spring.ai.openai.api-key=sk-YOUR_OPENAI_KEY_HERE
+spring.ai.openai.chat.model=gpt-4o-mini
+```
+
+> Get your key at [platform.openai.com](https://platform.openai.com). `gpt-4o-mini` is cheap and fast — perfect for this.
+
+---
+
+## PART 2 — Your First AI Call (Hello World)
+
+Before touching Threshold, understand the core concept.
+
+### The 3 things you always use:
+
+```java
+// 1. ChatClient — the main object you use to talk to AI
+// 2. A prompt (your message/instruction)  
+// 3. A response (what the AI says back)
+```
+
+### Step 4: Create a simple test controller
+
+```java
+// src/main/java/com/threshold/demo/HelloAiController.java
+
+package com.threshold.demo;
+
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/ai")
+public class HelloAiController {
+
+    private final ChatClient chatClient;
+
+    // Spring AI gives you a ChatClient.Builder — you build your ChatClient from it
+    public HelloAiController(ChatClient.Builder builder) {
+        this.chatClient = builder.build();
+    }
+
+    @GetMapping("/hello")
+    public String hello() {
+        return chatClient
+                .prompt()
+                .user("Say hello in one sentence.")
+                .call()
+                .content();  // .content() gives you the AI's reply as a plain String
+    }
+}
+```
+
+Run your app and hit `GET http://localhost:8080/ai/hello` — you'll get an AI response. That's all Spring AI is at its core.
+
+---
+
+## PART 3 — Your Additional Requirement: Summarize Patient Medical History
+
+Now let's build something real. A patient writes a long paragraph about their history, and you need to summarize it for the doctor.
+
+### Step 5: Create the Request/Response models
+
+```java
+// src/main/java/com/threshold/ai/MedicalSummaryRequest.java
+
+package com.threshold.ai;
+
+public class MedicalSummaryRequest {
+    private String patientHistory; // the long paragraph the patient wrote
+
+    public String getPatientHistory() { return patientHistory; }
+    public void setPatientHistory(String patientHistory) { 
+        this.patientHistory = patientHistory; 
+    }
+}
+```
+
+```java
+// src/main/java/com/threshold/ai/MedicalSummaryResponse.java
+
+package com.threshold.ai;
+
+public class MedicalSummaryResponse {
+    private String summary;
+
+    public MedicalSummaryResponse(String summary) { this.summary = summary; }
+    public String getSummary() { return summary; }
+}
+```
+
+---
+
+### Step 6: Create the AI Service
+
+This is where the actual AI logic lives. Always put AI calls in a **Service**, not directly in a Controller.
+
+```java
+// src/main/java/com/threshold/ai/MedicalSummaryService.java
+
+package com.threshold.ai;
+
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.PromptTemplate;
+import org.springframework.stereotype.Service;
+
+@Service
+public class MedicalSummaryService {
+
+    private final ChatClient chatClient;
+
+    public MedicalSummaryService(ChatClient.Builder builder) {
+        this.chatClient = builder.build();
+    }
+
+    public String summarizeHistory(String patientHistory) {
+
+        // This is your "prompt" — the instruction you give the AI
+        // Think of it like writing instructions to a very smart assistant
+        String prompt = """
+                You are a medical intake assistant for a clinic.
+                
+                A patient has written the following medical history in their own words.
+                Your job is to summarize it into 3-5 clear bullet points for the doctor.
+                
+                Rules:
+                - Do NOT diagnose or give medical advice
+                - Use plain medical language
+                - Be concise — the doctor should be able to read this in 10 seconds
+                - Format as bullet points starting with "•"
+                
+                Patient's medical history:
+                %s
+                """.formatted(patientHistory);
+
+        return chatClient
+                .prompt()
+                .user(prompt)
+                .call()
+                .content();
+    }
+}
+```
+
+---
+
+### Step 7: Create the Controller that exposes this as an API
+
+```java
+// src/main/java/com/threshold/ai/MedicalSummaryController.java
+
+package com.threshold.ai;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/ai")
+public class MedicalSummaryController {
+
+    private final MedicalSummaryService summaryService;
+
+    public MedicalSummaryController(MedicalSummaryService summaryService) {
+        this.summaryService = summaryService;
+    }
+
+    @PostMapping("/summarize-history")
+    public ResponseEntity<MedicalSummaryResponse> summarize(
+            @RequestBody MedicalSummaryRequest request) {
+
+        // Basic validation — don't send empty text to AI (wastes tokens + money)
+        if (request.getPatientHistory() == null || 
+            request.getPatientHistory().trim().isEmpty()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        String summary = summaryService.summarizeHistory(request.getPatientHistory());
+        return ResponseEntity.ok(new MedicalSummaryResponse(summary));
+    }
+}
+```
+
+---
+
+### Step 8: Test it
+
+Send this POST request to `http://localhost:8080/api/ai/summarize-history`:
+
+```json
+{
+  "patientHistory": "I've had type 2 diabetes for about 8 years now and I take metformin twice a day. I also had a heart attack back in 2019 and I've been on blood thinners since then. My doctor says my cholesterol is high too. I get really tired all the time and sometimes my legs swell up, especially at night. I had my gallbladder removed in 2015. My mom had diabetes and my dad had heart disease. I'm allergic to penicillin — last time I took it I got a bad rash all over. I don't smoke but I used to, quit about 5 years ago."
+}
+```
+
+You'll get back something like:
+
+```json
+{
+  "summary": "• Type 2 diabetes (8 years) — on Metformin twice daily\n• Cardiac history: MI in 2019, currently on anticoagulation therapy\n• Hypercholesterolemia — managed (details unspecified)\n• Symptoms: chronic fatigue and bilateral leg edema, worse at night\n• Surgical history: cholecystectomy (2015)\n• Family history: diabetes (mother), cardiovascular disease (father)\n• Allergy: Penicillin (rash)"
+}
+```
+
+The doctor sees bullet points in 5 seconds instead of reading a paragraph. ✅
+
+---
+
+## PART 4 — How to Wire This Into Your Intake Flow
+
+When a patient submits their intake form, call this service and **store both** the original text AND the summary:
+
+```java
+// Inside your IntakeService (wherever you handle form submission)
+
+@Service
+public class IntakeService {
+
+    private final MedicalSummaryService summaryService;
+    private final IntakeRepository intakeRepository; // your JPA repo
+
+    public IntakeService(MedicalSummaryService summaryService, 
+                         IntakeRepository intakeRepository) {
+        this.summaryService = summaryService;
+        this.intakeRepository = intakeRepository;
+    }
+
+    public Intake submitIntake(IntakeFormData formData) {
+        Intake intake = new Intake();
+        intake.setPatientId(formData.getPatientId());
+        
+        // Store the full original text (patient's own words)
+        intake.setMedicalHistoryFull(formData.getMedicalHistory());
+        
+        // Auto-generate and store the summary for the doctor
+        String summary = summaryService.summarizeHistory(formData.getMedicalHistory());
+        intake.setMedicalHistorySummary(summary);
+        
+        return intakeRepository.save(intake);
+    }
+}
+```
+
+Your `Intake` entity should have both fields:
+
+```java
+@Entity
+public class Intake {
+    @Id @GeneratedValue
+    private Long id;
+    
+    private Long patientId;
+    
+    @Column(columnDefinition = "TEXT")
+    private String medicalHistoryFull;     // original patient text
+    
+    @Column(columnDefinition = "TEXT")
+    private String medicalHistorySummary;  // AI-generated bullet points
+    
+    // ... other intake fields
+    // getters and setters
+}
+```
+
+---
+
+## PART 5 — The Intake Assistant (from the problem statement)
+
+Now the three abilities the Assistant needs:
+
+### Ability 1: "What's my appointment and what's outstanding?"
+
+```java
+// src/main/java/com/threshold/ai/IntakeAssistantService.java
+
+@Service
+public class IntakeAssistantService {
+
+    private final ChatClient chatClient;
+    private final AppointmentService appointmentService;   // your existing service
+    private final IntakeRepository intakeRepository;
+
+    public IntakeAssistantService(ChatClient.Builder builder,
+                                   AppointmentService appointmentService,
+                                   IntakeRepository intakeRepository) {
+        this.chatClient = builder.build();
+        this.appointmentService = appointmentService;
+        this.intakeRepository = intakeRepository;
+    }
+
+    public String chat(Long patientId, String userMessage) {
+
+        // Fetch the patient's real data first
+        Appointment appt = appointmentService.getByPatientId(patientId);
+        Intake intake = intakeRepository.findByPatientId(patientId).orElse(null);
+
+        // Tell the AI the facts, then let it answer the user's message naturally
+        String systemContext = """
+                You are the Intake Assistant for Threshold Clinic.
+                You help patients prepare for their visit. You do NOT give medical advice.
+                
+                Here is the current patient's data:
+                - Appointment: %s at %s with Dr. %s
+                - Intake status: %s
+                - Outstanding items: %s
+                - Insurance uploaded: %s
+                - ID uploaded: %s
+                
+                Answer the patient's question using only this information.
+                Be friendly and concise. If asked to do something you can't do 
+                (like diagnose), politely decline and explain you only help with 
+                intake and scheduling.
+                """.formatted(
+                    appt != null ? appt.getDate() : "not booked",
+                    appt != null ? appt.getTime() : "",
+                    appt != null ? appt.getDoctorName() : "",
+                    intake != null ? "In Progress" : "Not Started",
+                    buildOutstandingItems(intake),
+                    intake != null && intake.isInsuranceUploaded() ? "Yes" : "No",
+                    intake != null && intake.isIdUploaded() ? "Yes" : "No"
+                );
+
+        return chatClient
+                .prompt()
+                .system(systemContext)   // <-- system prompt = background instructions
+                .user(userMessage)       // <-- what the patient actually typed
+                .call()
+                .content();
+    }
+
+    private String buildOutstandingItems(Intake intake) {
+        if (intake == null) return "Everything — intake not started";
+        
+        var missing = new StringBuilder();
+        if (!intake.isMedicalHistoryComplete()) missing.append("Medical history, ");
+        if (!intake.isInsuranceUploaded()) missing.append("Insurance card, ");
+        if (!intake.isIdUploaded()) missing.append("Photo ID, ");
+        
+        return missing.isEmpty() ? "Nothing — all complete!" : missing.toString();
+    }
+}
+```
+
+---
+
+### Ability 2: "Move my appointment to next Tuesday afternoon"
+
+The trick here is: AI reads the intent, your Java code does the actual action.
+
+```java
+// Add this method to IntakeAssistantService
+
+public String handleReschedule(Long patientId, String userMessage) {
+
+    // Step 1: Ask the AI to extract the date/time intent as structured data
+    String extractionPrompt = """
+            The user wants to reschedule their appointment.
+            Their message: "%s"
+            
+            Extract the requested date and time. 
+            Today is %s.
+            
+            Respond ONLY in this exact format (no other text):
+            DATE: YYYY-MM-DD
+            TIME: HH:MM
+            
+            If you cannot determine a specific date/time, respond:
+            DATE: UNKNOWN
+            TIME: UNKNOWN
+            """.formatted(userMessage, java.time.LocalDate.now());
+
+    String extraction = chatClient
+            .prompt()
+            .user(extractionPrompt)
+            .call()
+            .content();
+
+    // Step 2: Parse the AI's structured response
+    String date = parseField(extraction, "DATE");
+    String time = parseField(extraction, "TIME");
+
+    if ("UNKNOWN".equals(date) || "UNKNOWN".equals(time)) {
+        return "I couldn't figure out the exact date and time you want. " +
+               "Could you be more specific? For example: 'next Tuesday at 2pm'";
+    }
+
+    // Step 3: Your Java code does the actual reschedule
+    try {
+        appointmentService.reschedule(patientId, date, time);
+        return "Done! Your appointment has been moved to " + date + " at " + time + 
+               ". You'll receive a confirmation email shortly.";
+    } catch (SlotNotAvailableException e) {
+        return "Sorry, that slot isn't available. Here are the next open times: " + 
+               appointmentService.getNextAvailableSlots(date);
+    }
+}
+
+private String parseField(String text, String field) {
+    for (String line : text.split("\n")) {
+        if (line.startsWith(field + ":")) {
+            return line.substring(field.length() + 1).trim();
+        }
+    }
+    return "UNKNOWN";
+}
+```
+
+---
+
+### Ability 3: "Here's what's been bothering me…" → Pre-visit Summary
+
+```java
+// Add this method to IntakeAssistantService
+
+public String generatePreVisitSummary(Long patientId, String patientDescription) {
+
+    String prompt = """
+            A patient is describing their reason for visiting the doctor.
+            Your job is to turn their description into a structured pre-visit summary 
+            for the clinician.
+            
+            Rules:
+            - Do NOT diagnose or suggest what might be wrong
+            - Do NOT give medical advice
+            - Organize the information clearly
+            - Use neutral clinical language
+            - Format with these sections:
+              CHIEF COMPLAINT: (one sentence)
+              SYMPTOMS: (bullet points)
+              DURATION: (how long this has been going on)
+              RELEVANT HISTORY MENTIONED: (anything they mentioned about past conditions)
+            
+            Patient's description:
+            %s
+            """.formatted(patientDescription);
+
+    String summary = chatClient
+            .prompt()
+            .user(prompt)
+            .call()
+            .content();
+
+    // Save this summary to the patient's intake record
+    intakeRepository.findByPatientId(patientId).ifPresent(intake -> {
+        intake.setPreVisitSummary(summary);
+        intakeRepository.save(intake);
+    });
+
+    return "I've organized your description into a pre-visit summary for the doctor. " +
+           "Here's what I captured:\n\n" + summary;
+}
+```
+
+---
+
+### Step 9: One unified chat endpoint
+
+Route the patient's message to the right ability:
+
+```java
+// src/main/java/com/threshold/ai/IntakeAssistantController.java
+
+@RestController
+@RequestMapping("/api/assistant")
+public class IntakeAssistantController {
+
+    private final IntakeAssistantService assistantService;
+
+    public IntakeAssistantController(IntakeAssistantService assistantService) {
+        this.assistantService = assistantService;
+    }
+
+    @PostMapping("/chat")
+    public ResponseEntity<AssistantResponse> chat(
+            @RequestBody AssistantRequest request,
+            @AuthenticationPrincipal UserDetails user) {  // whoever is logged in
+
+        Long patientId = getPatientId(user);
+        String message = request.getMessage().toLowerCase();
+        String reply;
+
+        // Simple intent routing — read the message and decide what to do
+        if (message.contains("reschedule") || message.contains("move") || 
+            message.contains("change my appointment")) {
+            reply = assistantService.handleReschedule(patientId, request.getMessage());
+
+        } else if (message.contains("bothering") || message.contains("symptoms") || 
+                   message.contains("reason for visit") || message.contains("i've been")) {
+            reply = assistantService.generatePreVisitSummary(patientId, request.getMessage());
+
+        } else {
+            // General questions about appointment status, outstanding items, etc.
+            reply = assistantService.chat(patientId, request.getMessage());
+        }
+
+        return ResponseEntity.ok(new AssistantResponse(reply));
+    }
+}
+```
+
+---
+
+## PART 6 — Key Concepts to Remember
+
+| Concept | What it means | Where you used it |
+|---|---|---|
+| `ChatClient` | The object that talks to the AI | Every service |
+| `.system(...)` | Background instructions the AI always follows | IntakeAssistant |
+| `.user(...)` | The actual message being sent | Everywhere |
+| `.call().content()` | Sends the request, gets text back | Everywhere |
+| Prompt engineering | Writing clear instructions so AI does the right thing | Your prompts |
+| Extract then act | AI reads intent → your Java code does the real work | Reschedule |
+
+---
+
+## What to build next (in order)
+
+1. Get Part 2 (Hello World) working first — confirm your API key works
+2. Add Part 3 (medical history summary) — standalone, easy to test
+3. Wire Part 4 into your intake form submission
+4. Build Part 5 abilities one at a time — status check → reschedule → pre-visit summary
+5. Connect the chat endpoint to your frontend
+
+The pattern is always the same: **craft a clear prompt → call the AI → use the response**. Once you have that down, the rest is just your normal Spring Boot code around it.

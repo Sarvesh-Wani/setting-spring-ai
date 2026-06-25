@@ -1,0 +1,83 @@
+If your DTO has:
+
+import java.time.Instant;
+
+public class AppointmentRequest {
+
+    private Instant appointmentTime;
+
+    // getters and setters
+}
+
+then Jackson (used by Spring Boot) expects the timestamp in ISO-8601 UTC format.
+
+Correct JSON
+{
+  "appointmentTime": "2026-06-25T10:30:00Z"
+}
+
+Here:
+
+2026-06-25 → Date
+T → Separator
+10:30:00 → Time
+Z → UTC (Zero offset)
+With milliseconds
+{
+  "appointmentTime": "2026-06-25T10:30:00.000Z"
+}
+
+Also valid.
+
+With a timezone offset
+
+Instead of Z, you can send an offset:
+
+{
+  "appointmentTime": "2026-06-25T16:00:00+05:30"
+}
+
+Spring/Jackson will automatically convert this to an Instant in UTC.
+
+For example:
+
+Input:
+
+{
+  "appointmentTime": "2026-06-25T16:00:00+05:30"
+}
+
+Stored as Instant:
+
+2026-06-25T10:30:00Z
+
+because Instant always represents a moment in UTC.
+
+If you're testing in Postman
+
+Body:
+
+{
+  "patientId": 1,
+  "clinicianId": 2,
+  "appointmentTime": "2026-06-25T15:30:00Z"
+}
+Recommended approach for applications in India
+
+If users select a local date and time (e.g., "25 June 2026, 4:00 PM"), it's often better to accept a LocalDateTime in your request DTO:
+
+private LocalDateTime appointmentTime;
+
+Request:
+
+{
+  "appointmentTime": "2026-06-25T16:00:00"
+}
+
+Then, in your service, convert it to an Instant using your application's time zone:
+
+Instant instant = request.getAppointmentTime()
+        .atZone(ZoneId.of("Asia/Kolkata"))
+        .toInstant();
+
+This avoids requiring frontend clients to deal with UTC conversions and is a common pattern for scheduling applications. Internally, storing the value as an Instant in the database remains a good practice.

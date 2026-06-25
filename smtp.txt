@@ -1,0 +1,129 @@
+Why You're Getting This Error
+The root cause is SSLHandshakeException: PKIX path building failed — Java's trust store doesn't trust the SSL certificate of your SMTP server (likely Gmail or a corporate/self-signed mail server).
+This happens because:
+
+Your JDK's cacerts keystore is missing the mail server's CA certificate — common when running inside Docker, a minimal JDK image, or a corporate network with a custom root CA.
+Or your application.properties has wrong TLS settings — e.g., using mail.smtp.starttls.enable=true on port 465 (which expects SSL directly), or vice versa.
+Or the certificate on the SMTP server is self-signed / expired.
+
+
+Fix 1 — Correct your application.properties (most likely cause)
+For Gmail, it should be exactly this:
+propertiesspring.mail.host=smtp.gmail.com
+spring.mail.port=587
+spring.mail.username=your-email@gmail.com
+spring.mail.password=your-app-password
+
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+spring.mail.properties.mail.smtp.starttls.required=true
+spring.mail.properties.mail.smtp.ssl.trust=smtp.gmail.com
+
+Use port 587 + STARTTLS, NOT port 465 with STARTTLS. Port 465 requires mail.smtp.ssl.enable=true instead.
+
+Fix 2 — Trust the SMTP server's certificate explicitly
+Add this to your properties as a quick fix:
+propertiesspring.mail.properties.mail.smtp.ssl.trust=smtp.gmail.com
+This tells Java to trust that host even if the cert chain isn't fully in cacerts.
+
+Fix 3 — Use an App Password (Gmail)
+If using Gmail, your normal password won't work. You need a Google App Password:
+
+Google Account → Security → 2-Step Verification → App Passwords → Generate one for "Mail"
+
+
+spring.mail.properties.mail.smtp.starttls.enable=true
+
+
+
+Your config is actually almost correct — port 587 + STARTTLS is right, and that looks like a valid App Password format.
+
+The one missing line causing your exact error is:
+
+properties
+spring.mail.properties.mail.smtp.ssl.trust=smtp.gmail.com
+Without this, Java's SSL validator tries to build a full certificate chain and fails — that's exactly the PKIX path building failed error you're seeing.
+
+Your fixed application.properties:
+
+properties
+spring.mail.host=smtp.gmail.com
+spring.mail.port=587
+spring.mail.username=sarvesh.wani@coditas.com
+spring.mail.password=csgr amsv idlw xwfq
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+spring.mail.properties.mail.smtp.ssl.trust=smtp.gmail.com
+That single line addition should fix it.
+
+However — one thing to verify first. Your email is sarvesh.wani@coditas.com, which is a company domain, not a personal @gmail.com. Even if Coditas uses Google Workspace under the hood, the App Password must be generated from that specific Google account (sarvesh.wani@coditas.com), not a personal Gmail. If the IT policy blocks App Passwords on the workspace account, this approach won't work and you'd need to ask your admin to enable it or use a different SMTP relay.
+
+If it still fails after adding that line, the issue is on the Google Workspace side, not your code.
+
+
+
+
+
+
+
+
+How to Use the Email Service Across the Project
+Based on the stack trace showing MailService.sendEmail() and AuthController, here's a clean, reusable pattern for the whole project:
+MailService.java — generic reusable service:
+java@Service
+@RequiredArgsConstructor
+public class MailService {
+
+    private final JavaMailSender mailSender;
+
+    @Value("${spring.mail.username}")
+    private String fromEmail;
+
+    public void sendEmail(String to, String subject, String body) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromEmail);
+        message.setTo(to);
+        message.setSubject(subject);
+        message.setText(body);
+        mailSender.send(message);
+    }
+
+    // For HTML emails (e.g. OTP, appointment confirmation)
+    public void sendHtmlEmail(String to, String subject, String htmlBody) throws MessagingException {
+        MimeMessage message = mailSender.createMimeMessage();
+        MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+        helper.setFrom(fromEmail);
+        helper.setTo(to);
+        helper.setSubject(subject);
+        helper.setText(htmlBody, true); // true = isHtml
+        mailSender.send(message);
+    }
+}
+Where to call it in your project:
+java// 1. AuthController — OTP / email verification
+mailService.sendEmail(user.getEmail(), "Verify your account", "Your OTP is: " + otp);
+
+// 2. Appointment booking confirmation
+mailService.sendEmail(patient.getEmail(), "Appointment Confirmed",
+    "Your appointment with Dr. " + doctor.getName() + " is on " + appointment.getDate());
+
+// 3. Appointment cancellation
+mailService.sendEmail(patient.getEmail(), "Appointment Cancelled",
+    "Your appointment on " + appointment.getDate() + " has been cancelled.");
+
+// 4. Password reset
+mailService.sendEmail(user.getEmail(), "Reset your password",
+    "Click here to reset: https://yourapp.com/reset?token=" + token);
+
+// 5. Doctor notification when new appointment is booked
+mailService.sendEmail(doctor.getEmail(), "New Appointment",
+    "You have a new appointment with " + patient.getName() + " on " + appointment.getDate());
+Pro tip — wrap calls in a try-catch so a mail failure doesn't crash the whole request:
+javatry {
+    mailService.sendEmail(user.getEmail(), subject, body);
+} catch (MailException e) {
+    log.error("Failed to send email to {}: {}", user.getEmail(), e.getMessage());
+    // Don't rethrow — email failure shouldn't block the main flow
+}
+
+The most likely single fix for your error right now is adding spring.mail.properties.mail.smtp.ssl.trust=smtp.gmail.com to your application.properties and making sure you're using a Gmail App Password, not your regular password.
